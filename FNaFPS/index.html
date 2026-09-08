@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Five Nights at Freddy's Pizzeria Simulator</title>
+    <link rel="icon" href="favicon.ico" />
+    <style>
+        html {
+            display: block;
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            overflow: hidden;
+            height: 100%;
+        }
+
+        body {
+            position: relative;
+            background-color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            height: 100%;
+        }
+
+        canvas {
+            display: none;
+            user-select: none;
+        }
+
+        .selection {
+            height: 100%;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .loader {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: white;
+            font-family: monospace;
+            text-align: center;
+            font-weight: lighter;
+            width: 60vw;
+            max-width: 500px;
+        }
+
+        .loader h1 {
+            margin: 0 0 1em 0;
+            font-size: 2em;
+            letter-spacing: 0.05em;
+        }
+
+        .loader .bar-track {
+            width: 100%;
+            height: 1.2em;
+            border: 1px solid white;
+            padding: 2px;
+            box-sizing: border-box;
+        }
+
+        .loader .bar-fill {
+            height: 100%;
+            width: 0%;
+            background-color: white;
+            transition: width 0.15s linear;
+        }
+
+        .loader h2 {
+            margin: 1em 0 0 0;
+            font-size: 0.9em;
+            font-weight: lighter;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="MMFCanvas" width="1280" height="720"> Your browser does not support Canvas, Please try again.</canvas>
+    <div class="selection" id="selection">
+        <div class="loader">
+            <h1 id="percentage">0%</h1>
+            <div class="bar-track">
+                <div class="bar-fill" id="bar"></div>
+            </div>
+            <h2 id="stage">STARTING UP...</h2>
+        </div>
+    </div>
+    <script src="src/jszip.min.js"></script>
+</body>
+<!--Made by irv77-->
+<!--Modified to launch directly from file:/// (no local server needed) by replacing
+    the fetch()/XHR-based part downloading with <script> tag loading, since fetch and
+    XMLHttpRequest are blocked by browsers when a page is opened via the file:// protocol,
+    but <script src="..."> tags are not.-->
+<script>
+    const parts = 20;
+    let gametitle, runtimecanvas
+    gametitle = document.title;
+    runtimecanvas = "resources/fnafps.cch";
+    // Prevents touchscreen move
+    window.addEventListener("scroll", preventMotion, false);
+    window.addEventListener("touchmove", preventMotion, false);
+    function preventMotion(event) {
+        window.scrollTo(0, 0);
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    // Fullscreen Key
+    const pressedKeys = {};
+    document.addEventListener('keydown', event => {
+        pressedKeys[event.key] = true;
+        if (pressedKeys['-'] && pressedKeys['=']) {
+            document.querySelector('canvas').requestFullscreen();
+            delete pressedKeys[event.key];
+        }
+    });
+    document.addEventListener('keyup', (event) => {
+        delete pressedKeys[event.key];
+    });
+    // -----------------
+    window.onload = function () {
+        const map = new Map();
+
+        function updateProgress(text, percent) {
+            percent = Math.max(0, Math.min(100, Math.floor(percent)));
+            document.title = percent + '% ' + gametitle
+            document.getElementById('percentage').innerHTML = percent + '%';
+            document.getElementById('bar').style.width = percent + '%';
+            document.getElementById('stage').innerHTML = text;
+        }
+
+        async function intercept() {
+            const ogfetch = window.fetch;
+            window.fetch = async function (input, init) {
+                if (typeof input === 'string' && input.startsWith('resources/')) {
+                    const fileName = input.split('/').pop();
+                    if (map.has(fileName)) {
+                        return ogfetch(map.get(fileName), init);
+                    }
+                }
+                return ogfetch(input, init);
+            };
+
+            const ogopen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function (method, url) {
+                if (url.startsWith('resources/')) {
+                    const fileName = url.split('/').pop();
+                    if (map.has(fileName)) {
+                        url = map.get(fileName);
+                    }
+                }
+                return ogopen.apply(this, arguments);
+            };
+
+            const types = [HTMLImageElement, HTMLAudioElement, HTMLVideoElement];
+            for (const Tag of types) {
+                const descriptor = Object.getOwnPropertyDescriptor(Tag.prototype, 'src');
+                if (descriptor && descriptor.set) {
+                    Object.defineProperty(Tag.prototype, 'src', {
+                        configurable: true,
+                        enumerable: true,
+                        get: descriptor.get,
+                        set: function (val) {
+                            if (typeof val === 'string' && val.startsWith('resources/')) {
+                                const fileName = val.split('/').pop();
+                                if (map.has(fileName)) {
+                                    val = map.get(fileName);
+                                }
+                            }
+                            descriptor.set.call(this, val);
+                        }
+                    });
+                }
+            }
+        }
+
+        // Decodes a base64 string into a Uint8Array in chunks, so we don't
+        // block the main thread for too long on one huge synchronous call.
+        function base64ToBytes(b64) {
+            const binary = atob(b64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        async function extract(resourcesBlob) {
+            const arrayBuffer = await resourcesBlob.arrayBuffer();
+            updateProgress('READING ARCHIVE...', 55);
+            const zip = await JSZip.loadAsync(arrayBuffer);
+            const files = Object.keys(zip.files).filter(name => !zip.files[name].dir);
+            const totalFiles = files.length;
+
+            for (let i = 0; i < totalFiles; i++) {
+                const file = zip.files[files[i]];
+                const blob = await file.async("blob");
+                const url = URL.createObjectURL(blob);
+                map.set(files[i], url);
+                updateProgress('UNPACKING ' + files[i].toUpperCase() + '...', Math.floor(((i + 1) / totalFiles) * 40) + 55);
+            }
+        }
+
+        async function wedone(resourcesBlob) {
+            await extract(resourcesBlob);
+            await intercept();
+            updateProgress('STARTING ENGINE...', 98);
+
+            const script = document.createElement('script');
+            script.src = 'src/Runtime.js';
+            script.onload = () => {
+                updateProgress('READY', 100);
+                new Runtime("MMFCanvas", runtimecanvas);
+            };
+            document.getElementById('MMFCanvas').style.display = 'block';
+            document.getElementById('selection').style.display = 'none';
+            document.title = gametitle;
+            document.head.appendChild(script);
+        }
+
+        // Loads each base64-encoded data part via a <script> tag (rather than
+        // fetch/XHR, which browsers block for local file:// pages) and merges
+        // them back into the original resources.zip once all parts are in.
+        function loadParts() {
+            return new Promise((resolve, reject) => {
+                let loadedCount = 0;
+
+                function loadPart(index) {
+                    if (index >= parts) {
+                        try {
+                            const byteArrays = [];
+                            for (let i = 0; i < parts; i++) {
+                                updateProgress('ASSEMBLING DATA PART ' + (i + 1) + '/' + parts + '...', Math.floor(((i + 1) / parts) * 15) + 35);
+                                byteArrays.push(base64ToBytes(window.__FNAF_PARTS[i]));
+                                window.__FNAF_PARTS[i] = null; // free memory as we go
+                            }
+                            const blob = new Blob(byteArrays);
+                            resolve(blob);
+                        } catch (e) {
+                            reject(e);
+                        }
+                        return;
+                    }
+
+                    const script = document.createElement('script');
+                    script.src = 'src/data/part' + (index + 1) + '.js';
+                    script.onload = () => {
+                        loadedCount++;
+                        updateProgress('LOADING GAME DATA (PART ' + loadedCount + '/' + parts + ')...', Math.floor((loadedCount / parts) * 35));
+                        loadPart(index + 1);
+                    };
+                    script.onerror = () => {
+                        updateProgress('ERROR: MISSING FILE src/data/part' + (index + 1) + '.js', 0);
+                        reject(new Error('Missing part ' + (index + 1)));
+                    };
+                    document.head.appendChild(script);
+                }
+
+                loadPart(0);
+            });
+        }
+
+        updateProgress('STARTING UP...', 0);
+        loadParts().then((resourcesBlob) => {
+            wedone(resourcesBlob);
+        }).catch((err) => {
+            console.error(err);
+            document.getElementById('stage').innerHTML = 'ERROR: FAILED TO LOAD GAME DATA';
+        });
+    };
+</script>
+</html>
